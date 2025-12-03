@@ -1,3 +1,5 @@
+from sqlmodel import SQLModel, Field, create_engine, Session, select
+
 from fastapi import FastAPI, HTTPException, status, UploadFile, File, Depends
 from sqlmodel import SQLModel, Field, create_engine, Session, select
 from passlib.context import CryptContext
@@ -18,12 +20,21 @@ engine = create_engine(
     DATABASE_URL,
     connect_args={"check_same_thread": False}
 )
-
 class User(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     username: str = Field(index=True, unique=True)
     hashed_password: str
     created_at: datetime = Field(default_factory=datetime.utcnow)
+
+class Document(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    filename: str                     # stored filename on disk
+    original_name: str                # original client filename
+    content_type: Optional[str] = None
+    size_bytes: int
+    uploaded_at: datetime = Field(default_factory=datetime.utcnow)
+    user_id: Optional[int] = Field(default=None, foreign_key="user.id")
+
 
 def get_session():
     with Session(engine) as session:
@@ -60,12 +71,45 @@ UPLOAD_DIR = "uploaded_files"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 @app.post("/upload")
-async def upload_file(file: UploadFile = File(...)):
-    file_path = os.path.join(UPLOAD_DIR, file.filename)
+async def upload_file(
+    file: UploadFile = File(...),
+    session: Session = Depends(get_session),
+):
+    # ensure uploads dir exists
+    os.makedirs(UPLOAD_DIR, exist_ok=True)
+
+    # to avoid collisions, we could just use the original filename for now
+    stored_filename = file.filename
+    file_path = os.path.join(UPLOAD_DIR, stored_filename)
+
     content = await file.read()
+    size_bytes = len(content)
+
     with open(file_path, "wb") as f:
         f.write(content)
-    return {"filename": file.filename, "size": len(content)}
+
+    # create Document record
+    doc = Document(
+        filename=stored_filename,
+        original_name=file.filename,
+        content_type=file.content_type,
+        size_bytes=size_bytes,
+        user_id=None,    # placeholder, later we’ll set from token
+    )
+    session.add(doc)
+    session.commit()
+    session.refresh(doc)
+
+    return {
+        "id": doc.id,
+        "filename": doc.filename,
+        "original_name": doc.original_name,
+        "size_bytes": doc.size_bytes,
+        "content_type": doc.content_type,
+        "uploaded_at": doc.uploaded_at.isoformat(),
+    }
+
+
 
 # ---- Auth endpoints ----
 class SignupSchema(BaseModel):
@@ -99,3 +143,20 @@ def login(payload: LoginSchema, session: Session = Depends(get_session)):
         )
     token = create_access_token({"sub": user.username})
     return {"access_token": token, "token_type": "bearer"}
+    
+@app.get("/documents")
+def list_documents(session: Session = Depends(get_session)):
+    docs = session.exec(select(Document)).all()
+    return [
+        {
+            "id": d.id,
+            "filename": d.filename,
+            "original_name": d.original_name,
+            "size_bytes": d.size_bytes,
+            "content_type": d.content_type,
+            "uploaded_at": d.uploaded_at.isoformat(),
+            "user_id": d.user_id,
+        }
+        for d in docs
+    ]
+
