@@ -1,5 +1,3 @@
-from sqlmodel import SQLModel, Field, create_engine, Session, select
-
 from fastapi import FastAPI, HTTPException, status, UploadFile, File, Depends
 from sqlmodel import SQLModel, Field, create_engine, Session, select
 from passlib.context import CryptContext
@@ -7,7 +5,10 @@ from jose import jwt
 from pydantic import BaseModel
 from datetime import datetime, timedelta
 from typing import Optional
+from pypdf import PdfReader
 import os
+import re
+
 
 # ==== CONFIG ====
 DATABASE_URL = "sqlite:///./app.db"
@@ -75,11 +76,9 @@ async def upload_file(
     file: UploadFile = File(...),
     session: Session = Depends(get_session),
 ):
-    # ensure uploads dir exists
     os.makedirs(UPLOAD_DIR, exist_ok=True)
 
-    # to avoid collisions, we could just use the original filename for now
-    stored_filename = file.filename
+    stored_filename = file.filename  # later we can change to unique names
     file_path = os.path.join(UPLOAD_DIR, stored_filename)
 
     content = await file.read()
@@ -88,13 +87,12 @@ async def upload_file(
     with open(file_path, "wb") as f:
         f.write(content)
 
-    # create Document record
     doc = Document(
         filename=stored_filename,
         original_name=file.filename,
         content_type=file.content_type,
         size_bytes=size_bytes,
-        user_id=None,    # placeholder, later we’ll set from token
+        user_id=None,
     )
     session.add(doc)
     session.commit()
@@ -108,7 +106,6 @@ async def upload_file(
         "content_type": doc.content_type,
         "uploaded_at": doc.uploaded_at.isoformat(),
     }
-
 
 
 # ---- Auth endpoints ----
@@ -159,4 +156,80 @@ def list_documents(session: Session = Depends(get_session)):
         }
         for d in docs
     ]
+
+@app.get("/documents/{doc_id}/chunks")
+def get_document_chunks(doc_id: int, session: Session = Depends(get_session)):
+    # find document
+    doc = session.exec(select(Document).where(Document.id == doc_id)).first()
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    file_path = os.path.join(UPLOAD_DIR, doc.filename)
+    if not os.path.exists(file_path):
+        raise HTTPException(status_code=500, detail="File not found on disk")
+
+    text = extract_text_from_file(file_path)
+    chunks = chunk_text(text, chunk_size=200, overlap=50)
+
+    return {
+        "document_id": doc.id,
+        "original_name": doc.original_name,
+        "num_chunks": len(chunks),
+        "chunks": chunks,
+    }
+# ==== TEXT EXTRACTION & CHUNKING HELPERS ====
+
+def extract_text_from_file(path: str) -> str:
+    """
+    Extract text from a file based on extension.
+    Supports: .txt, .md, .py, .json, .pdf
+    Falls back to binary -> utf-8 decode for unknown types.
+    """
+    _, ext = os.path.splitext(path)
+    ext = ext.lower()
+
+    # Simple text-based files
+    if ext in [".txt", ".md", ".py", ".json", ".log"]:
+        with open(path, "r", encoding="utf-8", errors="ignore") as f:
+            text = f.read()
+    elif ext == ".pdf":
+        text = ""
+        with open(path, "rb") as f:
+            reader = PdfReader(f)
+            for page in reader.pages:
+                page_text = page.extract_text() or ""
+                text += page_text + "\n"
+    else:
+        # Fallback: try treating as utf-8 text
+        with open(path, "rb") as f:
+            raw = f.read()
+        text = raw.decode("utf-8", errors="ignore")
+
+    # Basic cleanup: collapse whitespace
+    text = re.sub(r"\s+", " ", text).strip()
+    return text
+
+def chunk_text(text: str, chunk_size: int = 200, overlap: int = 50):
+    """
+    Very simple word-based chunking.
+    chunk_size: number of words per chunk
+    overlap: overlapping words between chunks
+    """
+    if not text:
+        return []
+
+    words = text.split()
+    chunks = []
+    i = 0
+    n = len(words)
+
+    while i < n:
+        chunk_words = words[i : i + chunk_size]
+        chunk = " ".join(chunk_words)
+        chunks.append(chunk)
+        if i + chunk_size >= n:
+            break
+        i += chunk_size - overlap
+
+    return chunks
 
