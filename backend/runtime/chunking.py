@@ -1,37 +1,47 @@
-# runtime/chunking.py
-import re
+# backend/runtime/chunking.py
+
 from typing import List
+from uuid import uuid4
 
 
 def chunk_text(
     text: str,
-    chunk_size: int = 200,
-    overlap: int = 50
-) -> List[str]:
+    source_name: str,
+    source_type: str,
+    chunk_size: int = 500,
+    overlap: int = 50,
+) -> List[dict]:
     """
-    Simple word-based chunking with overlap.
-    Deterministic and export-friendly.
+    Splits text into overlapping chunks and attaches metadata.
+
+    source_name: filename or URL
+    source_type: "text" | "pdf" | "json" | etc
     """
-
-    if not text:
-        return []
-
-    # normalize whitespace
-    text = re.sub(r"\s+", " ", text).strip()
-    words = text.split()
 
     chunks = []
-    i = 0
-    n = len(words)
+    start = 0
+    text_length = len(text)
 
-    while i < n:
-        chunk_words = words[i:i + chunk_size]
-        chunks.append(" ".join(chunk_words))
+    if not text or not text.strip():
+        return chunks
 
-        if i + chunk_size >= n:
-            break
+    while start < text_length:
+        end = start + chunk_size
+        chunk_body = text[start:end].strip()
 
-        i += chunk_size - overlap
+        if chunk_body:
+            chunks.append(
+                {
+                    "id": str(uuid4()),   # globally unique
+                    "text": chunk_body,
+                    "source": source_name,
+                    "type": source_type,
+                }
+            )
+
+        start = end - overlap
+
+        if start < 0:
+            start = 0
 
     return chunks
-

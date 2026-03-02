@@ -1,0 +1,56 @@
+{
+  "agent_id": "c072d948-77b4-4ec6-adaf-c31f0d8405e8",
+  "user_id": "default",
+  "messages": [
+    {
+      "role": "user",
+      "content": "who is the ceo",
+      "timestamp": "2026-02-12T18:46:26.093575"
+    },
+    {
+      "role": "assistant",
+      "content": "I don\u2019t know.",
+      "timestamp": "2026-02-12T18:46:26.094524"
+    },
+    {
+      "role": "user",
+      "content": "who are you",
+      "timestamp": "2026-02-23T12:25:50.244549"
+    },
+    {
+      "role": "assistant",
+      "content": "I don't know based on the provided information.",
+      "timestamp": "2026-02-23T12:25:50.245665"
+    },
+    {
+      "role": "user",
+      "content": "are you a human",
+      "timestamp": "2026-02-23T12:26:07.473892"
+    },
+    {
+      "role": "assistant",
+      "content": "I don't know based on the provided information.",
+      "timestamp": "2026-02-23T12:26:07.476427"
+    },
+    {
+      "role": "user",
+      "content": "can you telll me yourr name",
+      "timestamp": "2026-02-23T12:26:20.052458"
+    },
+    {
+      "role": "assistant",
+      "content": "I don't know based on the provided information.",
+      "timestamp": "2026-02-23T12:26:20.053696"
+    },
+    {
+      "role": "user",
+      "content": "what can you do for me",
+      "timestamp": "2026-02-23T12:26:39.994494"
+    },
+    {
+      "role": "assistant",
+      "content": "Based on the provided information, I can tell you what Arya Bistro offers:\n\n- Food: a multi-cuisine menu of starters (Paneer Tikka, Veg Spring Rolls, Tomato Basil Soup, Garlic Bread), main courses (Veg Biryani, Dal Tadka, Butter Paneer Masala, Margherita Pizza, White Sauce Pasta, Roti, Naan), desserts (Gulab Jamun, Chocolate Brownie, Vanilla Ice Cream), and beverages (Masala Chai, Fresh Lime Soda, Cold Coffee, Mineral Water).\n\n- Service details: prices include GST; 5 % service charge for dine-in; no packaging fees for takeaway; reservations can be made with no cancellation charge.\n\n- Location & hours: Pune, India; open Mon\u2013Fri 11 AM\u201310:30 PM, Sat\u2013Sun 10 AM\u201311:30 PM.\n\n- Contact: phone +91-9876543210, email contact@aryabistro.com.\n\nI don\u2019t know anything beyond what is listed here.",
+      "timestamp": "2026-02-23T12:26:39.996170"
+    }
+  ]
+}

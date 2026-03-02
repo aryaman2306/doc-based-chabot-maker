@@ -1,141 +1,122 @@
-# api/knowledge.py
-from fastapi import APIRouter, UploadFile, File, HTTPException
-from sqlmodel import Session, select
-from pydantic import BaseModel
-from db import engine
-from models.knowledge import KnowledgeSource
-
 import os
-import uuid
-import requests
-from bs4 import BeautifulSoup
+import json
+import numpy as np
+import faiss
 
-router = APIRouter(
-    prefix="/agents/{agent_id}/knowledge",
-    tags=["Knowledge"]
-)
+from fastapi import APIRouter, UploadFile, File, HTTPException
 
-BASE_PATH = "storage/agents"
+from runtime.parsers.registry import ParserRegistry
+from runtime.chunking import chunk_text
+from runtime.embeddings import embed_texts
 
+router = APIRouter()
+registry = ParserRegistry()
 
-# ---------- FILE UPLOAD ----------
-@router.post("/upload")
-def upload_file(agent_id: str, file: UploadFile = File(...)):
-    agent_dir = os.path.join(BASE_PATH, agent_id)
-    files_dir = os.path.join(agent_dir, "files")
-
-    if not os.path.exists(agent_dir):
-        raise HTTPException(status_code=404, detail="Agent not found")
-
-    os.makedirs(files_dir, exist_ok=True)
-
-    filename = f"{uuid.uuid4()}_{file.filename}"
-    file_path = os.path.join(files_dir, filename)
-
-    with open(file_path, "wb") as f:
-        f.write(file.file.read())
-
-    with Session(engine) as session:
-        ks = KnowledgeSource(
-            agent_id=agent_id,
-            type="file",
-            source_name=file.filename
-        )
-        session.add(ks)
-        session.commit()
-
-    return {
-        "message": "File uploaded successfully",
-        "filename": file.filename
-    }
+AGENTS_BASE = "storage/agents"
 
 
-# ---------- TEXT INGESTION ----------
-class TextKnowledge(BaseModel):
-    content: str
-    title: str | None = None
+@router.post("/agents/{agent_id}/upload")
+async def upload_knowledge(agent_id: str, file: UploadFile = File(...)):
 
-
-@router.post("/text")
-def add_text(agent_id: str, payload: TextKnowledge):
-    agent_dir = os.path.join(BASE_PATH, agent_id)
+    agent_dir = os.path.join(AGENTS_BASE, agent_id)
 
     if not os.path.exists(agent_dir):
         raise HTTPException(status_code=404, detail="Agent not found")
 
-    text_id = str(uuid.uuid4())
-    text_path = os.path.join(agent_dir, f"text_{text_id}.txt")
+    # =========================
+    # Save uploaded file
+    # =========================
 
-    with open(text_path, "w", encoding="utf-8") as f:
-        f.write(payload.content)
+    save_path = os.path.join(agent_dir, file.filename)
 
-    with Session(engine) as session:
-        ks = KnowledgeSource(
-            agent_id=agent_id,
-            type="text",
-            source_name=payload.title or "manual_text"
-        )
-        session.add(ks)
-        session.commit()
+    # Optional: prevent duplicate overwrite silently
+    if os.path.exists(save_path):
+        os.remove(save_path)
 
-    return {"message": "Text knowledge added"}
+    with open(save_path, "wb") as f:
+        f.write(await file.read())
 
-
-# ---------- URL INGESTION ----------
-class URLKnowledge(BaseModel):
-    url: str
-
-
-@router.post("/url")
-def add_url(agent_id: str, payload: URLKnowledge):
-    agent_dir = os.path.join(BASE_PATH, agent_id)
-
-    if not os.path.exists(agent_dir):
-        raise HTTPException(status_code=404, detail="Agent not found")
+    # =========================
+    # Parse file using registry
+    # =========================
 
     try:
-        response = requests.get(payload.url, timeout=10)
-        response.raise_for_status()
-    except Exception:
-        raise HTTPException(status_code=400, detail="Failed to fetch URL")
+        parser = registry.get_parser(save_path)
+        parsed_blocks = parser.parse(save_path)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Parsing failed: {str(e)}")
 
-    soup = BeautifulSoup(response.text, "html.parser")
-    text = soup.get_text(separator=" ", strip=True)
+    # =========================
+    # Load existing chunks (important fix)
+    # =========================
 
-    url_id = str(uuid.uuid4())
-    url_path = os.path.join(agent_dir, f"url_{url_id}.txt")
+    chunks_path = os.path.join(agent_dir, "chunks.json")
 
-    with open(url_path, "w", encoding="utf-8") as f:
-        f.write(text)
+    if os.path.exists(chunks_path):
+        with open(chunks_path, "r", encoding="utf-8") as f:
+            existing_chunks = json.load(f)
+    else:
+        existing_chunks = []
 
-    with Session(engine) as session:
-        ks = KnowledgeSource(
-            agent_id=agent_id,
-            type="url",
-            source_name=payload.url
+    new_chunks = []
+
+    # =========================
+    # Chunk parsed content
+    # =========================
+
+    for block in parsed_blocks:
+        source_name = os.path.basename(block["metadata"]["source"])
+        source_type = block["metadata"]["type"]
+
+        chunks = chunk_text(
+            block["text"],
+            source_name=source_name,
+            source_type=source_type
         )
-        session.add(ks)
-        session.commit()
 
-    return {"message": "URL knowledge added"}
+        new_chunks.extend(chunks)
 
+    if not new_chunks:
+        raise HTTPException(
+            status_code=400,
+            detail="No usable text content found in file"
+        )
 
-# ---------- LIST KNOWLEDGE ----------
-@router.get("/")
-def list_knowledge(agent_id: str):
-    with Session(engine) as session:
-        items = session.exec(
-            select(KnowledgeSource)
-            .where(KnowledgeSource.agent_id == agent_id)
-        ).all()
+    # Merge old + new
+    all_chunks = existing_chunks + new_chunks
 
-    return [
-        {
-            "id": k.id,
-            "type": k.type,
-            "source_name": k.source_name,
-            "created_at": k.created_at.isoformat()
-        }
-        for k in items
-    ]
+    # =========================
+    # Save updated chunks.json
+    # =========================
 
+    with open(chunks_path, "w", encoding="utf-8") as f:
+        json.dump(all_chunks, f, indent=2, ensure_ascii=False)
+
+    # =========================
+    # Rebuild FAISS index from ALL chunks
+    # =========================
+
+    texts = [c["text"] for c in all_chunks]
+
+    embeddings = embed_texts(texts)
+    embeddings = np.array(embeddings).astype("float32")
+
+    if embeddings.shape[0] == 0:
+        raise HTTPException(status_code=500, detail="Embedding failed")
+
+    dimension = embeddings.shape[1]
+
+    index = faiss.IndexFlatL2(dimension)
+    index.add(embeddings)
+
+    index_path = os.path.join(agent_dir, "index.faiss")
+    faiss.write_index(index, index_path)
+
+    return {
+        "status": "uploaded",
+        "file": file.filename,
+        "new_chunks_added": len(new_chunks),
+        "total_chunks": len(all_chunks)
+    }

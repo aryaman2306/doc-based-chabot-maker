@@ -2,7 +2,7 @@
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from runtime.retrieval import retrieve_chunks
+from runtime.retrieval import search_agent_index
 
 router = APIRouter(
     prefix="/agents/{agent_id}/search",
